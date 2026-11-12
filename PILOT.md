@@ -40,6 +40,21 @@ loaded. A reviewed Bazelrc overlay disables provisioning profiles and limits
 parallelism to two actions with a 4500 MB memory budget. The report records the
 original, overlay and effective Bazelrc digests.
 
+The first native build succeeded in run 43202755565 (8186 actions). Its fresh
+simulator install exceeded the initial 120-second deadline, before app launch.
+For a startup-only retry, enable **reuse_verified_pilot**. This downloads only
+that fixed run's artifact and verifies every retained checksum plus the pinned
+IPA SHA256 6d13c409d5c37a95d5d37cddd7d1fda0cd6420a189193c9fe05e9c24b7041d7c.
+It preserves compiled source f3fe3730efe42bcaefc5deca551a372a94154f3c and build
+100002, and records the newer test harness separately. It never substitutes an
+arbitrary artifact. This option depends on the original 14-day artifact
+retention; leave it disabled for a new native build.
+
+Startup uses an installed iOS 27.1 runtime matching Xcode/SDK 27.1. Boot and install
+have bounded 300-second and 600-second deadlines. The job records command timings,
+retains a short filtered installer log on failure, and bounds cleanup of its own
+simulator. The whole startup step is limited to 25 minutes.
+
 The configuration contains deliberately unusable placeholder Telegram API
 credentials. Do not attempt an account login. Real Telegram credentials and
 Apple signing material belong in protected secret storage for a later reviewed

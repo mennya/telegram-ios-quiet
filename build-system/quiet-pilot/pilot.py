@@ -19,6 +19,8 @@ REPORT = OUT / "pilot-report.json"
 UPSTREAM = "24638bc69bd083981b178dd1e7f921eebbf7fc46"
 BUNDLE = "org.mennya.telegramquiet.pilot"
 XCODE = Path("/Applications/Xcode_27.1.app")
+REUSED_COMMIT = "f3fe3730efe42bcaefc5deca551a372a94154f3c"
+REUSED_IPA_SHA256 = "6d13c409d5c37a95d5d37cddd7d1fda0cd6420a189193c9fe05e9c24b7041d7c"
 
 
 def require(value, message):
@@ -32,9 +34,18 @@ def digest(path):
 
 
 def call(*arguments, timeout=120):
-    result = subprocess.run(
-        list(arguments), cwd=ROOT, text=True, capture_output=True, timeout=timeout,
-    )
+    label = " ".join(arguments[:3])
+    print("Pilot command: " + label, flush=True)
+    started = time.monotonic()
+    try:
+        result = subprocess.run(
+            list(arguments), cwd=ROOT, text=True, capture_output=True, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        save(timed_out_command=label, command_timeout_seconds=timeout)
+        raise RuntimeError("Command timed out after " + str(timeout) + "s: " + label)
+    print("Pilot command finished in " + str(round(time.monotonic() - started, 1))
+          + "s: " + label, flush=True)
     require(result.returncode == 0, "Command failed: " + " ".join(arguments[:3])
             + "\n" + clean(result.stderr[-4000:]))
     return result.stdout.strip()
@@ -177,7 +188,55 @@ def build():
     save(status="built", simulator_archive_sha256=digest(target))
 
 
+def restore():
+    """Reuse only the independently verified pilot #2 binary, never arbitrary input."""
+    source = ROOT / ".ci-output/reuse-input"
+    require(source.is_dir(), "Missing pinned artifact input.")
+    declared = {}
+    for line in (source / "SHA256SUMS.txt").read_text().splitlines():
+        match = re.fullmatch(r"([0-9a-f]{64})  ([A-Za-z0-9_.-]+)", line)
+        require(match and match[2] not in declared, "Invalid artifact checksum manifest.")
+        declared[match[2]] = match[1]
+    require(set(declared) == {"pilot-report.json", "binary-platform.txt", "build.log",
+                              "telegram-quiet-simulator-only.ipa"},
+            "Unexpected retained artifact file list.")
+    for name, expected in declared.items():
+        path = source / name
+        require(path.is_file() and not path.is_symlink() and digest(path) == expected,
+                "Retained artifact checksum mismatch: " + name)
+    report = json.loads((source / "pilot-report.json").read_text())
+    require(report["fork_commit"] == REUSED_COMMIT and report["upstream_commit"] == UPSTREAM,
+            "Retained source mismatch.")
+    require(report["build_exit_code"] == 0 and report["bundle_version"] == "100002",
+            "Retained native build did not succeed.")
+    require(not report["apple_credentials_used"] and not report["telegram_credentials_used"]
+            and not report["account_login_attempted"], "Unexpected retained login context.")
+    ipa = source / "telegram-quiet-simulator-only.ipa"
+    require(digest(ipa) == REUSED_IPA_SHA256, "Pinned simulator binary hash mismatch.")
+    shutil.copyfile(ipa, OUT / ipa.name)
+    shutil.copyfile(source / "pilot-report.json", OUT / "reused-build-report.json")
+    save(status="built", harness_commit=call("git", "rev-parse", "HEAD"),
+         fork_commit=REUSED_COMMIT, reused_build_run_id=43202755565,
+         reused_build_run_number=2, compiled_build_number="100002", build_exit_code=0,
+         simulator_archive_sha256=REUSED_IPA_SHA256)
+
+
+def install_diagnostics(device):
+    predicate = 'process == "installd" OR process == "appinstalld" OR subsystem == "com.apple.installcoordination"'
+    try:
+        result = subprocess.run(
+            ["xcrun", "simctl", "spawn", device, "log", "show", "--last", "3m",
+             "--style", "compact", "--predicate", predicate],
+            capture_output=True, text=True, timeout=30,
+        )
+        output = clean((result.stdout + "\n" + result.stderr)[-24000:])
+        (OUT / "simulator-install.log").write_text(output + "\n")
+    except (subprocess.TimeoutExpired, OSError):
+        save(installer_diagnostics="unavailable within 30 seconds")
+
+
 def smoke():
+    save(smoke_phase="verify_archive")
     archive = OUT / "telegram-quiet-simulator-only.ipa"
     unpacked = OUT / "unpacked"
     require(archive.is_file() and not unpacked.exists(), "Missing archive or existing extraction.")
@@ -201,7 +260,10 @@ def smoke():
     require("iPhoneSimulator" in info.get("CFBundleSupportedPlatforms", []),
             "Refusing a device build in the simulator pilot.")
     require(info["CFBundleShortVersionString"] == "13.2", "Unexpected app version.")
-    require(info["CFBundleVersion"] == str(100000 + int(os.environ["GITHUB_RUN_NUMBER"])),
+    report = json.loads(REPORT.read_text())
+    expected_build = report.get("compiled_build_number",
+                                str(100000 + int(os.environ["GITHUB_RUN_NUMBER"])))
+    require(info["CFBundleVersion"] == expected_build,
             "Archive does not carry this run's build number.")
     executable = app / info["CFBundleExecutable"]
     require("arm64" in call("lipo", "-archs", str(executable)), "ARM64 app required.")
@@ -217,7 +279,11 @@ def smoke():
     runtimes = [r for r in runtimes if r.get("isAvailable")
                 and r["identifier"].startswith("com.apple.CoreSimulator.SimRuntime.iOS-")]
     require(runtimes, "No available iOS simulator runtime.")
-    runtime = max(runtimes, key=lambda r: tuple(int(v) for v in r["version"].split(".")))
+    save(available_simulator_runtimes=[{"name": r["name"], "version": r["version"]}
+                                      for r in runtimes])
+    matching = [r for r in runtimes if r["version"] == "27.1"]
+    require(matching, "No iOS 27.1 runtime matching the selected SDK is installed.")
+    runtime = matching[0]
     types = json.loads(call("xcrun", "simctl", "list", "devicetypes", "--json"))["devicetypes"]
     types = [d for d in types if d["name"].startswith("iPhone")]
     require(types, "No iPhone simulator device type.")
@@ -228,9 +294,16 @@ def smoke():
     require(re.fullmatch(r"[A-Fa-f0-9-]{36}", device), "Invalid owned simulator identifier.")
     save(owned_simulator=device, simulator_runtime=runtime["name"])
     try:
+        save(smoke_phase="boot_owned_simulator")
         call("xcrun", "simctl", "boot", device)
-        call("xcrun", "simctl", "bootstatus", device, "-b", timeout=180)
-        call("xcrun", "simctl", "install", device, str(app), timeout=120)
+        call("xcrun", "simctl", "bootstatus", device, "-b", timeout=300)
+        save(smoke_phase="install_verified_app")
+        try:
+            call("xcrun", "simctl", "install", device, str(app), timeout=600)
+        except RuntimeError:
+            install_diagnostics(device)
+            raise
+        save(smoke_phase="launch_verified_app")
         launched = call("xcrun", "simctl", "launch", device, BUNDLE, timeout=120)
         pid = re.search(r":\s*(\d+)\s*$", launched)
         require(pid, "Simulator did not report an application PID.")
@@ -243,8 +316,15 @@ def smoke():
         save(status="simulator_launch_passed", simulator_application_pid=int(pid[1]),
              screenshot="welcome.png", authenticated_features_tested=False)
     finally:
-        subprocess.run(["xcrun", "simctl", "shutdown", device], capture_output=True)
-        subprocess.run(["xcrun", "simctl", "delete", device], capture_output=True)
+        cleanup = []
+        for operation in ("shutdown", "delete"):
+            try:
+                result = subprocess.run(["xcrun", "simctl", operation, device],
+                                        capture_output=True, timeout=90)
+                cleanup.append({"operation": operation, "exit_code": result.returncode})
+            except subprocess.TimeoutExpired:
+                cleanup.append({"operation": operation, "timed_out": True})
+        save(owned_simulator_cleanup=cleanup)
         shutil.rmtree(unpacked)
 
 
@@ -262,13 +342,13 @@ def finalize():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("step", choices=["preflight", "build", "smoke", "finalize"])
+    parser.add_argument("step", choices=["preflight", "build", "restore", "smoke", "finalize"])
     arguments = parser.parse_args()
     guard()
     OUT.mkdir(parents=True, exist_ok=True)
     try:
         globals()[arguments.step]()
-    except (RuntimeError, subprocess.TimeoutExpired) as error:
+    except (RuntimeError, subprocess.TimeoutExpired, OSError) as error:
         message = clean(str(error))
         save(status="failed", failed_step=arguments.step, error=message)
         print(message, file=sys.stderr)

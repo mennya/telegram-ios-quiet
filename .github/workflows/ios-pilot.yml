@@ -2,9 +2,16 @@ name: iOS Simulator Pilot
 
 on:
   workflow_dispatch:
+    inputs:
+      reuse_verified_pilot:
+        description: Recheck the pinned pilot 2 binary without compiling again
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: quiet-ios-simulator
@@ -56,15 +63,31 @@ jobs:
           python3 build-system/quiet-pilot/pilot.py preflight
 
       - name: Fetch pinned public submodules
+        if: ${{ !inputs.reuse_verified_pilot }}
         timeout-minutes: 20
         run: |
           git submodule sync --recursive
           git submodule update --init --recursive --depth=1
 
       - name: Build simulator app without Apple or Telegram credentials
+        if: ${{ !inputs.reuse_verified_pilot }}
         run: python3 build-system/quiet-pilot/pilot.py build
 
+      - name: Download the fixed pilot 2 artifact for a simulator-only retry
+        if: ${{ inputs.reuse_verified_pilot }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: quiet-ios-simulator-2
+          run-id: 43202755565
+          github-token: ${{ github.token }}
+          path: .ci-output/reuse-input
+
+      - name: Verify and restore the exact previously compiled simulator binary
+        if: ${{ inputs.reuse_verified_pilot }}
+        run: python3 build-system/quiet-pilot/pilot.py restore
+
       - name: Launch a fresh logged-out simulator and capture its screen
+        timeout-minutes: 25
         run: python3 build-system/quiet-pilot/pilot.py smoke
 
       - name: Write the bounded pilot report and checksums
