@@ -235,6 +235,30 @@ def install_diagnostics(device):
         save(installer_diagnostics="unavailable within 30 seconds")
 
 
+def choose_simulator(runtimes, types, listed_devices):
+    """Use an installed compatible pair, but never boot a pre-existing device."""
+    by_id = {device["identifier"]: device for device in types}
+    by_name = {device["name"]: device for device in types}
+    candidates = []
+    for runtime in runtimes:
+        version = tuple(int(v) for v in runtime["version"].split(".")[:2])
+        if version > (27, 1):
+            continue
+        for listed in listed_devices.get(runtime["identifier"], []):
+            if not listed.get("isAvailable", True):
+                continue
+            model = by_id.get(listed.get("deviceTypeIdentifier"))
+            if model is None:
+                model = by_name.get(listed.get("name"))
+            if model and model["name"].startswith("iPhone"):
+                priority = ("Duo" not in model["name"], version,
+                            model["name"] == "iPhone 17", model["name"] == "iPhone 16")
+                candidates.append((priority, runtime, model))
+    require(candidates, "No listed compatible iPhone/runtime pair at or below SDK 27.1.")
+    _, runtime, model = max(candidates, key=lambda candidate: candidate[0])
+    return runtime, model
+
+
 def smoke():
     save(smoke_phase="verify_archive")
     archive = OUT / "telegram-quiet-simulator-only.ipa"
@@ -281,13 +305,13 @@ def smoke():
     require(runtimes, "No available iOS simulator runtime.")
     save(available_simulator_runtimes=[{"name": r["name"], "version": r["version"]}
                                       for r in runtimes])
-    matching = [r for r in runtimes if r["version"] == "27.1"]
-    require(matching, "No iOS 27.1 runtime matching the selected SDK is installed.")
-    runtime = matching[0]
     types = json.loads(call("xcrun", "simctl", "list", "devicetypes", "--json"))["devicetypes"]
     types = [d for d in types if d["name"].startswith("iPhone")]
     require(types, "No iPhone simulator device type.")
-    device_type = next((d for d in types if d["name"] == "iPhone 16"), types[-1])
+    listed = json.loads(call("xcrun", "simctl", "list", "devices", "available", "--json"))["devices"]
+    runtime, device_type = choose_simulator(runtimes, types, listed)
+    save(smoke_phase="create_compatible_owned_simulator", simulator_model=device_type["name"],
+         runtime_selection="listed compatible pair at or below selected SDK 27.1")
     device = call("xcrun", "simctl", "create",
                   "QuietPilot-" + os.environ["GITHUB_RUN_ID"],
                   device_type["identifier"], runtime["identifier"])

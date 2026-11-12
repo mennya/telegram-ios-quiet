@@ -50,8 +50,12 @@ It preserves compiled source f3fe3730efe42bcaefc5deca551a372a94154f3c and build
 arbitrary artifact. This option depends on the original 14-day artifact
 retention; leave it disabled for a new native build.
 
-Startup uses an installed iOS 27.1 runtime matching Xcode/SDK 27.1. Boot and install
-have bounded 300-second and 600-second deadlines. The job records command timings,
+Startup selects an installed compatible iPhone/runtime pair at or below SDK 27.1
+from the stock simulator inventory, then creates a fresh owned device. It never
+boots an existing device. Some installed runtime images support only specific
+models; a global device-type list does not establish compatibility. The report
+records the selected model and runtime. Boot and install have bounded 300-second
+and 600-second deadlines. The job records command timings,
 retains a short filtered installer log on failure, and bounds cleanup of its own
 simulator. The whole startup step is limited to 25 minutes.
 
