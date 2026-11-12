@@ -86,3 +86,6 @@ submodules/TelegramApi/ObjC/SwiftPMGenerated/
 submodules/TelegramApi/Tests/SwiftPMGenerated/
 /Telegram.app/
 build/accessibility/
+
+# Retained through Actions artifacts, not source control.
+/.ci-output/

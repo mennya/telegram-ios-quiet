@@ -1,0 +1,62 @@
+name: iOS Simulator Pilot
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quiet-ios-simulator
+  cancel-in-progress: false
+
+jobs:
+  simulator:
+    runs-on: xcode-27
+    timeout-minutes: 180
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+      QUIET_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+    steps:
+      - name: Checkout the reviewed pilot
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          submodules: false
+          persist-credentials: false
+
+      - name: Check Xcode, architecture and disposable-runner capacity
+        run: python3 build-system/quiet-pilot/pilot.py preflight
+
+      - name: Fetch pinned public submodules
+        timeout-minutes: 20
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --recursive --depth=1
+
+      - name: Build simulator app without Apple or Telegram credentials
+        run: python3 build-system/quiet-pilot/pilot.py build
+
+      - name: Launch a fresh logged-out simulator and capture its screen
+        run: python3 build-system/quiet-pilot/pilot.py smoke
+
+      - name: Write the bounded pilot report and checksums
+        if: always()
+        env:
+          QUIET_JOB_STATUS: ${{ job.status }}
+        run: python3 build-system/quiet-pilot/pilot.py finalize
+
+      - name: Retain simulator-only evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: quiet-ios-simulator-${{ github.run_number }}
+          path: |
+            .ci-output/quiet-pilot/*.json
+            .ci-output/quiet-pilot/*.log
+            .ci-output/quiet-pilot/*.txt
+            .ci-output/quiet-pilot/*.png
+            .ci-output/quiet-pilot/*.ipa
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14

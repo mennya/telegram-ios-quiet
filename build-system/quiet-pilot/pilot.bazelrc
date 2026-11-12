@@ -1,0 +1,4 @@
+# Applied only by the logged-out simulator experiment.
+build --jobs=2
+build --local_resources=memory=4500
+build --//Telegram:disableProvisioningProfiles

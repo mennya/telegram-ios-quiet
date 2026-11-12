@@ -1,3 +1,14 @@
+# Quiet iOS - unofficial simulator pilot
+
+Personal Telegram iOS fork. The first milestone is a manual GitHub macOS simulator
+build and logged-out startup check; personal UI features are not ported yet.
+
+See [PILOT.md](PILOT.md) for the exact scope, placeholder-credential restriction,
+artifacts and next TestFlight milestone. The current archive is not an iPhone app
+release and must not be used for account login.
+
+---
+
 # Telegram iOS Source Code Compilation Guide
 
 We welcome all developers to use our API and source code to create applications on our platform.
