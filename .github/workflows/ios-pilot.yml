@@ -11,12 +11,35 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  workflow-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout workflow inputs
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate Actions contexts and workflow structure
+        shell: bash
+        run: |
+          set -euo pipefail
+          quiet_tools="$RUNNER_TEMP/quiet-actionlint"
+          mkdir -p "$quiet_tools"
+          curl --fail --location --silent --show-error --max-time 60 --max-filesize 3145728 \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
+            -o "$quiet_tools/actionlint.tar.gz"
+          printf '%s  %s\n' \
+            8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8 \
+            "$quiet_tools/actionlint.tar.gz" | sha256sum --check
+          tar -xzf "$quiet_tools/actionlint.tar.gz" -C "$quiet_tools" actionlint
+          "$quiet_tools/actionlint" -no-color .github/workflows/ios-pilot.yml
+
   simulator:
+    needs: workflow-check
     runs-on: xcode-27
     timeout-minutes: 180
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
-      QUIET_RUNNER_ENVIRONMENT: ${{ runner.environment }}
     steps:
       - name: Checkout the reviewed pilot
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -26,7 +49,11 @@ jobs:
           persist-credentials: false
 
       - name: Check Xcode, architecture and disposable-runner capacity
-        run: python3 build-system/quiet-pilot/pilot.py preflight
+        env:
+          QUIET_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          printf 'QUIET_RUNNER_ENVIRONMENT=%s\n' "$QUIET_RUNNER_ENVIRONMENT" >> "$GITHUB_ENV"
+          python3 build-system/quiet-pilot/pilot.py preflight
 
       - name: Fetch pinned public submodules
         timeout-minutes: 20

@@ -1,0 +1,6 @@
+# actionlint 1.7.12 predates this documented GitHub-hosted preview label.
+# https://docs.github.com/en/actions/reference/runners/github-hosted-runners
+# This only extends lint vocabulary. The runtime guard rejects self-hosted runners.
+self-hosted-runner:
+  labels:
+    - xcode-27

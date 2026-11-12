@@ -24,6 +24,9 @@ anything to TestFlight.
 Start **iOS Simulator Pilot** manually in GitHub Actions. There are no push or
 scheduled triggers. The job uses a standard runner in this public repository.
 Do not switch to a paid runner or change spending limits as an automatic retry.
+An actionlint check runs on Linux before the Mac job. Its binary is pinned by
+version and SHA256. The lint configuration recognizes the documented xcode-27
+preview label; the simulator runtime guard still rejects self-hosted runners.
 
 The preflight checks the selected compiler, architecture, RAM and disk. Only on
 this ephemeral GitHub runner, it may remove unselected Xcode app bundles to make
