@@ -259,6 +259,44 @@ def choose_simulator(runtimes, types, listed_devices):
     return runtime, model
 
 
+def startup_diagnostics(device):
+    """Retain only this fresh pilot's bounded, filtered startup evidence."""
+    predicate = 'process == "Telegram" OR eventMessage CONTAINS "org.mennya.telegramquiet.pilot"'
+    try:
+        result = subprocess.run(
+            ["xcrun", "simctl", "spawn", device, "log", "show", "--last", "3m",
+             "--style", "compact", "--predicate", predicate],
+            capture_output=True, text=True, timeout=30,
+        )
+        output = clean((result.stdout + "\n" + result.stderr)[-32000:])
+        (OUT / "application-startup.log").write_text(output + "\n")
+    except (subprocess.TimeoutExpired, OSError):
+        save(startup_log="unavailable within 30 seconds")
+    locations = [Path.home() / "Library/Logs/DiagnosticReports"]
+    own_data = Path.home() / "Library/Developer/CoreSimulator/Devices" / device / "data"
+    locations += [own_data / "Library/Logs/CrashReporter",
+                  own_data / "Library/Logs/DiagnosticReports"]
+    reports = []
+    for directory in locations:
+        if directory.is_dir():
+            reports.extend(directory.glob("Telegram-*.ips"))
+            reports.extend(directory.glob("Telegram_*.crash"))
+    for index, path in enumerate(sorted(reports, key=lambda p: p.stat().st_mtime,
+                                        reverse=True)[:3]):
+        if path.is_file() and not path.is_symlink() and path.stat().st_size <= 2 * 1024**2:
+            source = path.read_text(errors="replace")
+            bounded = source if len(source) <= 64000 else source[:32000] + "\n[...omitted...]\n" + source[-32000:]
+            (OUT / ("application-crash-" + str(index) + ".txt")).write_text(clean(bounded) + "\n")
+    try:
+        result = subprocess.run(
+            ["xcrun", "simctl", "io", device, "screenshot", str(OUT / "startup-failure.png")],
+            capture_output=True, timeout=30,
+        )
+        save(startup_failure_screenshot_exit_code=result.returncode)
+    except (subprocess.TimeoutExpired, OSError):
+        save(startup_failure_screenshot="unavailable within 30 seconds")
+
+
 def smoke():
     save(smoke_phase="verify_archive")
     archive = OUT / "telegram-quiet-simulator-only.ipa"
@@ -339,6 +377,9 @@ def smoke():
         call("xcrun", "simctl", "io", device, "screenshot", str(OUT / "welcome.png"))
         save(status="simulator_launch_passed", simulator_application_pid=int(pid[1]),
              screenshot="welcome.png", authenticated_features_tested=False)
+    except (RuntimeError, OSError):
+        startup_diagnostics(device)
+        raise
     finally:
         cleanup = []
         for operation in ("shutdown", "delete"):
